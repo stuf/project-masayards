@@ -1,0 +1,35 @@
+os: unstable
+
+environment:
+  matrix:
+    - nodejs_version: 6
+    - nodejs_version: 4
+
+cache:
+  - "%LOCALAPPDATA%/Yarn"
+
+matrix:
+  fast_finish: true
+
+build: off
+
+version: '{build}'
+
+shallow_clone: true
+
+clone_depth: 1
+
+install:
+  - ps: Install-Product node $env:nodejs_version
+  - set CI=true
+  - choco install yarn
+  - refreshenv
+  - yarn
+
+test_script:
+  - node --version
+  - npm run lint
+  - npm run test
+  - npm run build
+  - npm run test-e2e
+  - npm run package
