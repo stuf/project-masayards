@@ -1,0 +1,11 @@
+{
+  "name": "electron-react-boilerplate",
+  "dependencies": {
+    "react": "registry:npm/react#15.0.1+20160601175240",
+    "react-router-redux": "registry:npm/react-router-redux#4.0.0+20160602212457"
+  },
+  "globalDependencies": {
+    "redux": "registry:dt/redux#3.5.2+20160703092728",
+    "redux-actions": "registry:dt/redux-actions#0.8.0+20161006171701"
+  }
+}
