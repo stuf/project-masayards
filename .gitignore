@@ -34,3 +34,8 @@ dist
 release
 main.js
 main.js.map
+
+# JetBrains ignores
+.idea
+*.iml
+
