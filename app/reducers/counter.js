@@ -5,7 +5,9 @@ import type { Action as CounterAction } from '../actions/counter';
 
 type State = Number;
 
-export default createReducer(0, {
+const initialState: State = 0;
+
+export default createReducer(initialState, {
   [INCREMENT_COUNTER](state: State, action: CounterAction) {
     return state + 1;
   },

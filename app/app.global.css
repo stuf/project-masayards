@@ -35,3 +35,14 @@ a:hover {
   text-decoration: none;
   cursor: pointer;
 }
+
+.dbg {
+  border: dashed 0.1rem #f00;
+}
+
+#game-view-holder > webview {
+  border: solid 1px #f00;
+  width: 800px;
+  height: 480px;
+}
+
