@@ -24,7 +24,9 @@ let debuggerAttached = false;
 //region Utility functions
 const shouldCancel = url => (config.pathPrefix.test(url) && firstGameLoad);
 
-const processPath = S.Just((url, prefix) => url.replace(prefix, ''));
+const isGamePath = url => config.pathPrefix.test(url) ? S.Just(url) : S.Nothing();
+
+const processPath = S.Just((url) => url.replace(config.pathPrefix, ''));
 
 const wrapWith = R.curry((wc, fs, fn) => fn(wc, fs));
 
@@ -39,22 +41,24 @@ const getCookies = () => [
 //endregion
 
 //region onBeforeRequestHandler
-function onBeforeRequestHandler(details, callback) {
-  const cancel = shouldCancel(details.url);
-  callback({ cancel });
+function onBeforeRequestHandler(wc, transformerActions) {
+  return (details, callback) => {
+    const cancel = shouldCancel(details.url);
+    callback({ cancel });
 
-  if (!!cancel) {
-    console.log(`Found game SWF at URL ${details.url}`);
-    firstGameLoad = false;
-    wc.loadURL(details.url);
+    if (!!cancel) {
+      console.log(`Found game SWF at URL ${details.url}`);
+      firstGameLoad = false;
+      wc.loadURL(details.url);
+    }
   }
 }
 //endregion
 
 //region onDebuggerDetach
 function onDebuggerDetach(wc) {
-  console.log('onDebuggerDetach', wc);
   return () => {
+    console.log('onDebuggerDetach', wc);
     debuggerAttached = false;
     return debuggerAttached;
   };
@@ -73,28 +77,24 @@ const parseJson = R.compose(JSON.parse, R.replace(config.apiDataPrefix, ''));
 
 const parseQs = R.unary(qs.parse);
 
-const removeApiToken = S.Just(d => { d.api_token = null; return d; });
-
 type ParseResponse = {
   body: ?any,
   postBody: ?any
 };
 
-const parseResponse = (result):ParseResponse => ({
+const parseResponse = (result): ParseResponse => ({
   body: intoEither(parseJson, result.body),
   postBody: intoEither(parseQs, result.postData)
 });
+//endregion
 
 //region onDebuggerMessage
-function onDebuggerMessage(wc) {
-  console.log('onDebuggerMessage:create', wc);
+function onDebuggerMessage(wc, transformerActions) {
   return (event, method, params) => {
-    console.log('onDebuggerMessage', event, method, params);
-    const pathPrefix = config.pathPrefix;
-    const requestId = params.requestId;
-    const url = S.toMaybe(R.path(['request', 'url']));
-
-    return handleNetworkMessage(wc, method, params);
+    const url = R.pathOr('', ['request', 'url'], params);
+    if (isGamePath(url).isJust) {
+      return handleNetworkMessage(params.requestId, transformerActions)(wc, method, params);
+    }
   };
 }
 //endregion
@@ -102,9 +102,10 @@ function onDebuggerMessage(wc) {
 //region Network event handlers and application
 //region Network.REQUEST_WILL_BE_SENT handler
 const requestWillBeSent = (requestId, transformerActions) => R.curry((wc, method, params) => {
-  console.log('handler.requestWillBeSent', { wc, method, params });
-  if (!config.pathPrefix.test(params.request.url))
+  // console.log('handler.requestWillBeSent', { wc, method, params });
+  if (!config.pathPrefix.test(params.request.url)) {
     return;
+  }
 
   req = req.update(requestId,
     it => ({
@@ -118,9 +119,10 @@ const requestWillBeSent = (requestId, transformerActions) => R.curry((wc, method
 
 //region Network.RESPONSE_RECEIVED handler
 const responseReceived = (requestId, transformerActions) => R.curry((wc, method, params) => {
-  console.log('handler.responseReceived', { wc, method, params });
-  if (!config.pathPrefix.test(params.request.url))
+  // console.log('handler.responseReceived', { wc, method, params });
+  if (!config.pathPrefix.test(params.request.url)) {
     return;
+  }
 
   req = req.update(requestId,
     it => ({ ...it, response: params.response }));
@@ -129,9 +131,10 @@ const responseReceived = (requestId, transformerActions) => R.curry((wc, method,
 
 //region Network.LOADING_FINISHED handler
 const loadingFinished = (requestId, transformerActions) => R.curry((wc, method, params) => {
-  console.log('handler.loadingFinished', { wc, method, params });
-  if (!req.has(requestId))
+  // console.log('handler.loadingFinished', { wc, method, params });
+  if (!req.has(requestId)) {
     return;
+  }
 
   const { path, request, response } = req.get(requestId);
   const debuggerPayload = { requestId };
@@ -139,39 +142,33 @@ const loadingFinished = (requestId, transformerActions) => R.curry((wc, method, 
 
   const getResponseBodyHandlerFn = (err, result) => {
     const { body, postBody } = parseResponse(result);
-
-    // TODO Replace with S.toMaybe
     const eventToHandle = findEvent(path);
-
-    // TODO Replace with S.toMaybe
     const handler = transformerActions[eventToHandle];
-
-    const res = { body, postBody };
+    const res = { body, postBody, request, response };
 
     if (eventToHandle && handler) {
-      console.log(`${requestId}: Network.getResponseBody done = ${path}\t%o`,
-        JSON.parse(JSON.stringify({ ...res })));
-      // TODO Replace with Maybe
-      // handler.ap(res);
+      console.log(`${requestId}: Network.getResponseBody done = ${path}\t%o`, JSON.parse(JSON.stringify({ ...res })));
       handler(res);
     }
   };
 
-  // wc.debugger.sendCommand(Network.GET_RESPONSE_BODY, debuggerPayload, handleGetResponseBody(path, request, response));
   wc.debugger.sendCommand(Network.GET_RESPONSE_BODY, debuggerPayload, getResponseBodyHandlerFn);
 });
 //endregion
+//endregion
 
-function handleNetworkMessage(wc, method, params) {
-  console.log(`handleNetworkMessage: '${method}'`);
-  const fn = R.cond([
-    [R.equals(Network.REQUEST_WILL_BE_SENT), R.identity(requestWillBeSent)],
-    [R.equals(Network.RESPONSE_RECEIVED), R.identity(responseReceived)],
-    [R.equals(Network.LOADING_FINISHED), R.identity(loadingFinished)]
-  ]);
-  if (fn == null) return;
-  //const a = R.apply(S.lift3, R.map(S.toMaybe, [fn, wc, method, params]));
-  return fn(wc, method, params);
+//region handleNetworkMessage
+function handleNetworkMessage(requestId, transformerActions) {
+  return (wc, method, params) => {
+    const fn = R.cond([
+      [R.equals(Network.REQUEST_WILL_BE_SENT), R.identity(requestWillBeSent)],
+      [R.equals(Network.RESPONSE_RECEIVED), R.identity(responseReceived)],
+      [R.equals(Network.LOADING_FINISHED), R.identity(loadingFinished)],
+      [R.T, R.always((...args) => args)]
+    ]);
+    if (fn == null) return;
+    return fn(wc, method, params);
+  }
 }
 //endregion
 
@@ -196,11 +193,13 @@ export function handleGameView(transformerActions) {
         console.error('Failed to attach debugger; ', e.message);
       }
 
+      const cookies = getCookies();
+      console.log('Setting cookies: ', cookies);
+      wc.executeJavaScript(cookies);
       wc.debugger.on('detach', withWc(onDebuggerDetach));
       wc.debugger.on('message', withWc(onDebuggerMessage));
       wc.debugger.sendCommand(Network.ENABLE);
       ws.webRequest.onBeforeRequest(withWc(onBeforeRequestHandler));
-      wc.executeJavaScript(getCookies());
     }
   };
 }

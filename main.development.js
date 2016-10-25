@@ -4,16 +4,13 @@ let menu;
 let template;
 let mainWindow = null;
 
-
 if (process.env.NODE_ENV === 'development') {
   require('electron-debug')(); // eslint-disable-line global-require
 }
 
-
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
-
 
 const installExtensions = async () => {
   if (process.env.NODE_ENV === 'development') {
@@ -37,7 +34,7 @@ app.on('ready', async () => {
 
   mainWindow = new BrowserWindow({
     show: false,
-    width: 1024,
+    width: 1280,
     height: 728
   });
 
