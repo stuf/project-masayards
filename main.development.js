@@ -29,6 +29,9 @@ const installExtensions = async () => {
   }
 };
 
+app.commandLine.appendSwitch('ppapi-flash-path', './lib/PepperFlashPlayer.plugin');
+app.commandLine.appendSwitch('ppapi-flash-version', '23.0.0.205');
+
 app.on('ready', async () => {
   await installExtensions();
 

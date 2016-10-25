@@ -14,21 +14,54 @@ type RequestResponse = {
   body: ?any,
   postData: ?string
 };
+
+type TransformerActionMap = { [key: string]: any };
+
+type RequestId = string;
+
+type RequestObject = {
+  path: string,
+  request: any,
+  response: any,
+  errors: Array<any>
+};
+
+type RequestMap = Immutable.Map<string, Object>;
+
+type HandlerContext = {
+  requestId: string,
+  transformerActions: TransformerActionMap
+};
+
+type WcHandlerContext = {
+  wc: any,
+  transformerActions: TransformerActionMap
+};
+
+type ParseResponse = {
+  body: ?any,
+  postBody: ?any
+};
+
+interface NetworkEventHandler {
+
+}
 //endregion
 
 const PROTOCOL_VERSION = '1.1';
 
-let firstGameLoad = true;
-let debuggerAttached = false;
+let firstGameLoad: boolean = true;
+let debuggerAttached: boolean = false;
+let req: RequestMap = Map();
 
 //region Utility functions
-const shouldCancel = url => (config.pathPrefix.test(url) && firstGameLoad);
+const shouldCancel = (url: string): boolean => (config.pathPrefix.test(url) && firstGameLoad);
 
-const isGamePath = url => config.pathPrefix.test(url) ? S.Just(url) : S.Nothing();
+const isGamePath = (url: string): boolean => config.pathPrefix.test(url) ? S.Just(url) : S.Nothing();
 
-const processPath = S.Just((url) => url.replace(config.pathPrefix, ''));
+const processPath = S.Just((url: string): string => url.replace(config.pathPrefix, ''));
 
-const wrapWith = R.curry((wc, fs, fn) => fn(wc, fs));
+const wrapWith = R.curry((wc, transformerActions, fn) => fn({ wc, transformerActions }));
 
 const getCookies = () => [
   'document.cookie = "cklg=welcome;expires=Sun, 09 Feb 2019 09:00:09 GMT;domain=.dmm.com;path=/";',
@@ -41,28 +74,16 @@ const getCookies = () => [
 //endregion
 
 //region onBeforeRequestHandler
-function onBeforeRequestHandler(wc, transformerActions) {
-  return (details, callback) => {
-    const cancel = shouldCancel(details.url);
-    callback({ cancel });
+const onBeforeRequestHandler = ({ wc, transformerActions }:WcHandlerContext): void => (details, callback): void => {
+  const cancel = shouldCancel(details.url);
+  callback({ cancel });
 
-    if (!!cancel) {
-      console.log(`Found game SWF at URL ${details.url}`);
-      firstGameLoad = false;
-      wc.loadURL(details.url);
-    }
+  if (!!cancel) {
+    console.log(`Found game SWF at URL ${details.url}`);
+    firstGameLoad = false;
+    wc.loadURL(details.url);
   }
-}
-//endregion
-
-//region onDebuggerDetach
-function onDebuggerDetach(wc) {
-  return () => {
-    console.log('onDebuggerDetach', wc);
-    debuggerAttached = false;
-    return debuggerAttached;
-  };
-}
+};
 //endregion
 
 //region Parsing bodies
@@ -77,32 +98,34 @@ const parseJson = R.compose(JSON.parse, R.replace(config.apiDataPrefix, ''));
 
 const parseQs = R.unary(qs.parse);
 
-type ParseResponse = {
-  body: ?any,
-  postBody: ?any
-};
-
 const parseResponse = (result): ParseResponse => ({
   body: intoEither(parseJson, result.body),
   postBody: intoEither(parseQs, result.postData)
 });
 //endregion
 
-//region onDebuggerMessage
-function onDebuggerMessage(wc, transformerActions) {
-  return (event, method, params) => {
-    const url = R.pathOr('', ['request', 'url'], params);
-    if (isGamePath(url).isJust) {
-      return handleNetworkMessage(params.requestId, transformerActions)(wc, method, params);
-    }
+//region onDebuggerDetach
+const onDebuggerDetach = ({ wc, transformerActions }:WcHandlerContext): void => {
+  return () => {
+    console.log('onDebuggerDetach', wc);
+    debuggerAttached = false;
+    return debuggerAttached;
   };
-}
+};
+//endregion
+
+//region onDebuggerMessage
+const onDebuggerMessage = ({ wc, transformerActions }:WcHandlerContext): void => (event, method, params) => {
+  const url = R.pathOr('', ['request', 'url'], params);
+  if (isGamePath(url).isJust) {
+    return handleNetworkMessage({ requestId: params.requestId, transformerActions })(wc, method, params);
+  }
+};
 //endregion
 
 //region Network event handlers and application
 //region Network.REQUEST_WILL_BE_SENT handler
-const requestWillBeSent = (requestId, transformerActions) => R.curry((wc, method, params) => {
-  // console.log('handler.requestWillBeSent', { wc, method, params });
+const requestWillBeSent = ({ requestId, transformerActions }:HandlerContext): void => R.curry((wc, method, params) => {
   if (!config.pathPrefix.test(params.request.url)) {
     return;
   }
@@ -118,7 +141,7 @@ const requestWillBeSent = (requestId, transformerActions) => R.curry((wc, method
 //endregion
 
 //region Network.RESPONSE_RECEIVED handler
-const responseReceived = (requestId, transformerActions) => R.curry((wc, method, params) => {
+const responseReceived = ({ requestId, transformerActions }:HandlerContext): void => R.curry((wc, method, params) => {
   // console.log('handler.responseReceived', { wc, method, params });
   if (!config.pathPrefix.test(params.request.url)) {
     return;
@@ -130,8 +153,7 @@ const responseReceived = (requestId, transformerActions) => R.curry((wc, method,
 //endregion
 
 //region Network.LOADING_FINISHED handler
-const loadingFinished = (requestId, transformerActions) => R.curry((wc, method, params) => {
-  // console.log('handler.loadingFinished', { wc, method, params });
+const loadingFinished = ({ requestId, transformerActions }:HandlerContext): void => R.curry((wc, method, params) => {
   if (!req.has(requestId)) {
     return;
   }
@@ -140,7 +162,7 @@ const loadingFinished = (requestId, transformerActions) => R.curry((wc, method, 
   const debuggerPayload = { requestId };
   req = req.delete(requestId);
 
-  const getResponseBodyHandlerFn = (err, result) => {
+  const getResponseBodyHandlerFn = (err, result): void => {
     const { body, postBody } = parseResponse(result);
     const eventToHandle = findEvent(path);
     const handler = transformerActions[eventToHandle];
@@ -158,49 +180,46 @@ const loadingFinished = (requestId, transformerActions) => R.curry((wc, method, 
 //endregion
 
 //region handleNetworkMessage
-function handleNetworkMessage(requestId, transformerActions) {
+const handleNetworkMessage = ({ requestId, transformerActions }:HandlerContext): void => {
   return (wc, method, params) => {
     const fn = R.cond([
       [R.equals(Network.REQUEST_WILL_BE_SENT), R.identity(requestWillBeSent)],
       [R.equals(Network.RESPONSE_RECEIVED), R.identity(responseReceived)],
       [R.equals(Network.LOADING_FINISHED), R.identity(loadingFinished)],
-      [R.T, R.always((...args) => args)]
+      [R.T, R.always((...args) => args)]  // fallback, remove me
     ]);
     if (fn == null) return;
-    return fn(wc, method, params);
+    return fn({ requestId, transformerActions })(wc, method, params);
   }
-}
+};
 //endregion
 
-export function handleGameView(transformerActions) {
-  return (e) => {
-    const view = e.target;
-    const wc = view.getWebContents();
-    const ws = wc.session;
-    const withWc = wrapWith(wc, transformerActions);
+export const handleGameView = (transformerActions: TransformerActionMap): void => (e): void => {
+  const view = e.target;
+  const wc = view.getWebContents();
+  const ws = wc.session;
+  const withWc = wrapWith(wc, transformerActions);
 
-    view.addEventListener('close', () => {
-      console.info('Closing, disable debugger.');
-      wc.debugger.sendCommand(Network.DISABLE);
-    });
+  view.addEventListener('close', () => {
+    console.info('Closing, disable debugger.');
+    wc.debugger.sendCommand(Network.DISABLE);
+  });
 
-    if (!debuggerAttached) {
-      try {
-        wc.debugger.attach(PROTOCOL_VERSION);
-        debuggerAttached = true;
-      }
-      catch (err) {
-        console.error('Failed to attach debugger; ', e.message);
-      }
-
-      const cookies = getCookies();
-      console.log('Setting cookies: ', cookies);
-      wc.executeJavaScript(cookies);
-      wc.debugger.on('detach', withWc(onDebuggerDetach));
-      wc.debugger.on('message', withWc(onDebuggerMessage));
-      wc.debugger.sendCommand(Network.ENABLE);
-      ws.webRequest.onBeforeRequest(withWc(onBeforeRequestHandler));
+  if (!debuggerAttached) {
+    try {
+      wc.debugger.attach(PROTOCOL_VERSION);
+      debuggerAttached = true;
     }
-  };
-}
+    catch (err) {
+      console.error('Failed to attach debugger; ', e.message);
+    }
 
+    const cookies = getCookies();
+    console.log('Setting cookies: ', cookies);
+    wc.executeJavaScript(cookies);
+    wc.debugger.on('detach', withWc(onDebuggerDetach));
+    wc.debugger.on('message', withWc(onDebuggerMessage));
+    wc.debugger.sendCommand(Network.ENABLE);
+    ws.webRequest.onBeforeRequest(withWc(onBeforeRequestHandler));
+  }
+};
