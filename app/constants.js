@@ -105,3 +105,13 @@ export const ApiEventPaths = Map({
 export const ApplicationEvents = {
   REGISTER_GAME_VIEW: 'REGISTER_GAME_VIEW'
 };
+
+export const Network = {
+  REQUEST_WILL_BE_SENT: 'Network.requestWillBeSent',
+  RESPONSE_RECEIVED: 'Network.responseReceived',
+  LOADING_FINISHED: 'Network.loadingFinished',
+  DETACH: 'Network.detach',
+  ENABLE: 'Network.enable',
+  DISABLE: 'Network.disable',
+  GET_RESPONSE_BODY: 'Network.getResponseBody'
+};

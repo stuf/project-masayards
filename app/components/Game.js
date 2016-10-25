@@ -5,13 +5,14 @@ import GameUI from './game/GameUI';
 
 class Game extends Component {
   static propTypes = {
+    actions: PropTypes.object.isRequired,
     transformerActions: PropTypes.object.isRequired
   };
 
   render() {
     return (
       <div>
-        <GameView transformers={this.props.transformerActions} />
+        <GameView actions={this.props.actions} transformerActions={this.props.transformerActions} />
         <GameUI />
       </div>
     );

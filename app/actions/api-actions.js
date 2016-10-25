@@ -8,6 +8,7 @@ export const handlers = Seq.Keyed(ApiEventPaths)
                            .flatMap((path, event) =>
                              Map.of(event, new Internal.ApiHandler({ path, event, handler: null })));
 
+// TODO Replace with S.toMaybe
 export const findEvent = (findPath) => {
   const pathRegex = new RegExp(`^${findPath}$`);
   return ApiEventPaths.findKey(path => pathRegex.test(path));
