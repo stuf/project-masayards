@@ -42,23 +42,18 @@ type ParseResponse = {
   body: ?any,
   postBody: ?any
 };
-
-interface NetworkEventHandler {
-
-}
 //endregion
 
-const PROTOCOL_VERSION = '1.1';
+const PROTOCOL_VERSION: string = '1.1';
 
 let firstGameLoad: boolean = true;
 let debuggerAttached: boolean = false;
-let req: RequestMap = Map();
+let req: ?RequestMap = null;
+
+let _wc: ?Object = null;
+let _transformerActions: ?TransformerActionMap = null;
 
 //region Utility functions
-const shouldCancel = (url: string): boolean => (config.pathPrefix.test(url) && firstGameLoad);
-
-const isGamePath = (url: string): boolean => config.pathPrefix.test(url) ? S.Just(url) : S.Nothing();
-
 const processPath = S.Just((url: string): string => url.replace(config.pathPrefix, ''));
 
 const wrapWith = R.curry((wc, transformerActions, fn) => fn({ wc, transformerActions }));
@@ -73,9 +68,19 @@ const getCookies = () => [
 ].join('\n');
 //endregion
 
+//region `params` utilities
+const getUrl = R.pathOr('', ['request', 'url']);
+
+const getRequest = R.prop('request');
+
+const getResponse = R.prop('response');
+
+const getRequestId = R.prop('requestId');
+//endregion
+
 //region onBeforeRequestHandler
 const onBeforeRequestHandler = ({ wc, transformerActions }:WcHandlerContext): void => (details, callback): void => {
-  const cancel = shouldCancel(details.url);
+  const cancel = config.gameSwfPrefix.test(details.url) && firstGameLoad;
   callback({ cancel });
 
   if (!!cancel) {
@@ -105,65 +110,88 @@ const parseResponse = (result): ParseResponse => ({
 //endregion
 
 //region onDebuggerDetach
-const onDebuggerDetach = ({ wc, transformerActions }:WcHandlerContext): void => {
-  return () => {
-    console.log('onDebuggerDetach', wc);
-    debuggerAttached = false;
-    return debuggerAttached;
-  };
+const onDebuggerDetach = () => {
+  console.log('onDebuggerDetach', _wc);
+  debuggerAttached = false;
+  return debuggerAttached;
 };
 //endregion
 
 //region onDebuggerMessage
-const onDebuggerMessage = ({ wc, transformerActions }:WcHandlerContext): void => (event, method, params) => {
-  const url = R.pathOr('', ['request', 'url'], params);
-  if (isGamePath(url).isJust) {
-    return handleNetworkMessage({ requestId: params.requestId, transformerActions })(wc, method, params);
+const onDebuggerMessage = (event, method, params): void => {
+  console.log('request ID %s -> %s (url: %s)', getRequestId(params), method, getUrl(params));
+
+  if (method == Network.LOADING_FAILED) {
+    console.warn('Loading failed:', params);
+  }
+
+  if (config.pathPrefix.test(getUrl(params)) && !firstGameLoad) {
+    let handlerFn;
+    switch (method) {
+      case Network.REQUEST_WILL_BE_SENT:
+        handlerFn = requestWillBeSent;
+        break;
+      case Network.RESPONSE_RECEIVED:
+        handlerFn = responseReceived;
+        break;
+      case Network.LOADING_FINISHED:
+        handlerFn = loadingFinished;
+        break;
+    }
+    if (!!handlerFn) {
+      handlerFn(requestId, method, params);
+    }
   }
 };
 //endregion
 
 //region Network event handlers and application
 //region Network.REQUEST_WILL_BE_SENT handler
-const requestWillBeSent = ({ requestId, transformerActions }:HandlerContext): void => R.curry((wc, method, params) => {
-  if (!config.pathPrefix.test(params.request.url)) {
+const requestWillBeSent = (requestId: RequestId, method: string, params: any): void => {
+  console.log('requestWillBeSent', { params });
+  if (!config.pathPrefix.test(getUrl(params))) {
     return;
   }
 
+  console.log('request will be sent:', method, getUrl(params));
   req = req.update(requestId,
     it => ({
       ...it,
-      request: params.request,
+      request: getRequest(params),
       path: processPath
     })
   );
-});
+};
 //endregion
 
 //region Network.RESPONSE_RECEIVED handler
-const responseReceived = ({ requestId, transformerActions }:HandlerContext): void => R.curry((wc, method, params) => {
-  // console.log('handler.responseReceived', { wc, method, params });
-  if (!config.pathPrefix.test(params.request.url)) {
+const responseReceived = (requestId: RequestId, method: string, params: any): void => {
+  console.log('handler.responseReceived', { params });
+  if (!config.pathPrefix.test(getUrl(params))) {
     return;
   }
 
   req = req.update(requestId,
-    it => ({ ...it, response: params.response }));
-});
+    it => ({ ...it, response: getResponse(response) }));
+};
 //endregion
 
 //region Network.LOADING_FINISHED handler
-const loadingFinished = ({ requestId, transformerActions }:HandlerContext): void => R.curry((wc, method, params) => {
+const loadingFinished = (requestId: RequestId, method: string, params: any): void => {
   if (!req.has(requestId)) {
     return;
   }
+
+  console.log('loadingFinished for requestId %s', requestId);
 
   const { path, request, response } = req.get(requestId);
   const debuggerPayload = { requestId };
   req = req.delete(requestId);
 
   const getResponseBodyHandlerFn = (err, result): void => {
+    console.log('getResponseBodyHandlerFn', { err, result });
     const { body, postBody } = parseResponse(result);
+    console.log('parsed:', { body, postBody });
     const eventToHandle = findEvent(path);
     const handler = transformerActions[eventToHandle];
     const res = { body, postBody, request, response };
@@ -175,30 +203,19 @@ const loadingFinished = ({ requestId, transformerActions }:HandlerContext): void
   };
 
   wc.debugger.sendCommand(Network.GET_RESPONSE_BODY, debuggerPayload, getResponseBodyHandlerFn);
-});
-//endregion
-//endregion
-
-//region handleNetworkMessage
-const handleNetworkMessage = ({ requestId, transformerActions }:HandlerContext): void => {
-  return (wc, method, params) => {
-    const fn = R.cond([
-      [R.equals(Network.REQUEST_WILL_BE_SENT), R.identity(requestWillBeSent)],
-      [R.equals(Network.RESPONSE_RECEIVED), R.identity(responseReceived)],
-      [R.equals(Network.LOADING_FINISHED), R.identity(loadingFinished)],
-      [R.T, R.always((...args) => args)]  // fallback, remove me
-    ]);
-    if (fn == null) return;
-    return fn({ requestId, transformerActions })(wc, method, params);
-  }
 };
+//endregion
 //endregion
 
 export const handleGameView = (transformerActions: TransformerActionMap): void => (e): void => {
   const view = e.target;
   const wc = view.getWebContents();
   const ws = wc.session;
-  const withWc = wrapWith(wc, transformerActions);
+
+  if (!req) {
+    req = Map();
+    console.log('RequestMap =>', req);
+  }
 
   view.addEventListener('close', () => {
     console.info('Closing, disable debugger.');
@@ -206,6 +223,7 @@ export const handleGameView = (transformerActions: TransformerActionMap): void =
   });
 
   if (!debuggerAttached) {
+    console.info('Debugger not attached, trying to attach it.');
     try {
       wc.debugger.attach(PROTOCOL_VERSION);
       debuggerAttached = true;
@@ -215,11 +233,11 @@ export const handleGameView = (transformerActions: TransformerActionMap): void =
     }
 
     const cookies = getCookies();
-    console.log('Setting cookies: ', cookies);
+    console.log('Setting cookies:\n%s', cookies);
     wc.executeJavaScript(cookies);
-    wc.debugger.on('detach', withWc(onDebuggerDetach));
-    wc.debugger.on('message', withWc(onDebuggerMessage));
+    wc.debugger.on('detach', onDebuggerDetach);
+    wc.debugger.on('message', onDebuggerMessage);
     wc.debugger.sendCommand(Network.ENABLE);
-    ws.webRequest.onBeforeRequest(withWc(onBeforeRequestHandler));
+    ws.webRequest.onBeforeRequest(onBeforeRequestHandler);
   }
 };

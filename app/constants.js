@@ -110,6 +110,7 @@ export const Network = {
   REQUEST_WILL_BE_SENT: 'Network.requestWillBeSent',
   RESPONSE_RECEIVED: 'Network.responseReceived',
   LOADING_FINISHED: 'Network.loadingFinished',
+  LOADING_FAILED: 'Network.loadingFailed',
   DETACH: 'Network.detach',
   ENABLE: 'Network.enable',
   DISABLE: 'Network.disable',
